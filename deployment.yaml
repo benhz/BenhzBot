@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dingteam-bot
+  namespace: default
+  labels:
+    app: dingteam-bot
+spec:
+  replicas: 1  # 建议单实例运行（避免定时任务重复执行）
+  selector:
+    matchLabels:
+      app: dingteam-bot
+  template:
+    metadata:
+      labels:
+        app: dingteam-bot
+    spec:
+      containers:
+      - name: dingteam-bot
+        image: dingteam-bot:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        # 从 ConfigMap 加载
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: dingteam-bot-config
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: dingteam-bot-config
+              key: DB_PORT
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: dingteam-bot-config
+              key: DB_NAME
+        - name: DB_SSLMODE
+          valueFrom:
+            configMapKeyRef:
+              name: dingteam-bot-config
+              key: DB_SSLMODE
+        - name: SERVER_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: dingteam-bot-config
+              key: SERVER_PORT
+        - name: TIMEZONE
+          valueFrom:
+            configMapKeyRef:
+              name: dingteam-bot-config
+              key: TIMEZONE
+        
+        # 从 Secret 加载
+        - name: DINGTALK_APP_KEY
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: DINGTALK_APP_KEY
+        - name: DINGTALK_APP_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: DINGTALK_APP_SECRET
+        - name: DINGTALK_AGENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: DINGTALK_AGENT_ID
+        - name: DINGTALK_ROBOT_CODE
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: DINGTALK_ROBOT_CODE
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: DB_PASSWORD
+        - name: ADMIN_USERS
+          valueFrom:
+            secretKeyRef:
+              name: dingteam-bot-secret
+              key: ADMIN_USERS
+        
+        # 健康检查
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+        
+        # 资源限制
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      
+      # 重启策略
+      restartPolicy: Always

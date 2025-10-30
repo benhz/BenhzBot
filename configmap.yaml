@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dingteam-bot-config
+  namespace: default
+data:
+  # 数据库配置
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "dingteam_bot"
+  DB_SSLMODE: "disable"
+  
+  # 服务配置
+  SERVER_PORT: "8080"
+  TIMEZONE: "Asia/Shanghai"
