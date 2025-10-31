@@ -57,8 +57,11 @@ func main() {
 	}
 	log.Println("✓ 钉钉连接成功")
 
-	// 6. 初始化消息处理器
-	messageHandler := handlers.NewMessageHandler(cfg, taskService, statsService, permService, dtClient)
+	// 6. 初始化 Dify 处理器（基于会话的权限检查）
+	difyHandler := handlers.NewDifyHandler(permService, taskService, statsService)
+
+	// 7. 初始化消息处理器
+	messageHandler := handlers.NewMessageHandler(cfg, taskService, statsService, permService, dtClient, difyHandler)
 
 	// 7. 启动调度器
 	sched, err := scheduler.NewScheduler(taskService, dtClient, cfg.Server.Timezone)
@@ -84,7 +87,7 @@ func main() {
 	defer streamClient.Stop()
 
 	// 9. 启动 HTTP 服务器（健康检查 + API）
-	router := setupRouter(permService, taskService, statsService)
+	router := setupRouter(permService, taskService, statsService, difyHandler)
 	go func() {
 		addr := ":" + cfg.Server.Port
 		log.Printf("✓ HTTP 服务器启动在 %s", addr)
@@ -106,7 +109,7 @@ func main() {
 	log.Println("✅ 服务已停止")
 }
 
-func setupRouter(permService *services.PermissionService, taskService *services.TaskService, statsService *services.StatsService) *gin.Engine {
+func setupRouter(permService *services.PermissionService, taskService *services.TaskService, statsService *services.StatsService, difyHandler *handlers.DifyHandler) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -126,12 +129,18 @@ func setupRouter(permService *services.PermissionService, taskService *services.
 		})
 	})
 
-	// API 路由（供 Dify 调用）
+	// API 路由
 	apiHandler := handlers.NewAPIHandler(permService, taskService, statsService)
 
 	api := router.Group("/api/v1")
 	{
-		// 权限相关 API
+		// Dify 集成 API（推荐使用）
+		dify := api.Group("/dify")
+		{
+			dify.POST("/execute", difyHandler.Execute) // 统一执行端点（基于会话的权限检查）
+		}
+
+		// 权限相关 API（旧版，仍然保留兼容性）
 		permissions := api.Group("/permissions")
 		{
 			permissions.GET("/check", apiHandler.CheckPermission) // 检查权限

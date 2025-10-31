@@ -21,6 +21,7 @@ type MessageHandler struct {
 	statsService *services.StatsService
 	permService  *services.PermissionService
 	dtClient     *dingtalk.Client
+	difyHandler  *DifyHandler
 }
 
 func NewMessageHandler(
@@ -29,6 +30,7 @@ func NewMessageHandler(
 	statsService *services.StatsService,
 	permService *services.PermissionService,
 	dtClient *dingtalk.Client,
+	difyHandler *DifyHandler,
 ) *MessageHandler {
 	return &MessageHandler{
 		cfg:          cfg,
@@ -36,6 +38,7 @@ func NewMessageHandler(
 		statsService: statsService,
 		permService:  permService,
 		dtClient:     dtClient,
+		difyHandler:  difyHandler,
 	}
 }
 
@@ -44,6 +47,16 @@ func (h *MessageHandler) HandleMessage(ctx context.Context, msg *dingtalk.Incomi
 	// 只处理 @ 机器人的消息
 	if !msg.IsInAtList {
 		return nil
+	}
+
+	// 注册会话信息（供 Dify 后续调用时使用）
+	if h.difyHandler != nil {
+		h.difyHandler.RegisterSession(
+			msg.ConversationID,
+			msg.SenderStaffID,
+			msg.SenderNick,
+			msg.ConversationID,
+		)
 	}
 
 	// 提取纯文本内容（去除 @机器人 部分）
