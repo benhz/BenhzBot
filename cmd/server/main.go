@@ -43,7 +43,15 @@ func main() {
 	statsService := services.NewStatsService(db.DB)
 	permService := services.NewPermissionService(db.DB)
 
-	// 5. 初始化钉钉客户端
+	// 5. 初始化超级管理员（从配置文件读取）
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := permService.InitializeSuperAdmins(ctx, cfg.AdminUsers); err != nil {
+		log.Printf("⚠️  超级管理员初始化失败: %v", err)
+	}
+
+	// 6. 初始化钉钉客户端
 	dtClient := dingtalk.NewClient(
 		cfg.DingTalk.AppKey,
 		cfg.DingTalk.AppSecret,
@@ -57,27 +65,24 @@ func main() {
 	}
 	log.Println("✓ 钉钉连接成功")
 
-	// 6. 初始化 Dify 处理器（基于会话的权限检查）
+	// 7. 初始化 Dify 处理器（基于会话的权限检查）
 	difyHandler := handlers.NewDifyHandler(permService, taskService, statsService, dtClient)
 
-	// 7. 初始化消息处理器
+	// 8. 初始化消息处理器
 	messageHandler := handlers.NewMessageHandler(cfg, taskService, statsService, permService, dtClient, difyHandler)
 
-	// 7. 启动调度器
+	// 9. 启动调度器
 	sched, err := scheduler.NewScheduler(taskService, dtClient, cfg.Server.Timezone)
 	if err != nil {
 		log.Fatalf("❌ 创建调度器失败: %v", err)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	if err := sched.Start(ctx); err != nil {
 		log.Fatalf("❌ 启动调度器失败: %v", err)
 	}
 	defer sched.Stop()
 
-	// 8. 启动钉钉 Stream 客户端
+	// 10. 启动钉钉 Stream 客户端
 	streamClient := dingtalk.NewStreamClient(cfg.DingTalk.AppKey, cfg.DingTalk.AppSecret, messageHandler)
 	go func() {
 		if err := streamClient.Start(ctx); err != nil {
@@ -86,7 +91,7 @@ func main() {
 	}()
 	defer streamClient.Stop()
 
-	// 9. 启动 HTTP 服务器（健康检查 + API）
+	// 11. 启动 HTTP 服务器（健康检查 + API）
 	router := setupRouter(permService, taskService, statsService, difyHandler)
 	go func() {
 		addr := ":" + cfg.Server.Port
@@ -96,7 +101,7 @@ func main() {
 		}
 	}()
 
-	// 10. 等待退出信号
+	// 12. 等待退出信号
 	log.Println("✅ DingTeam Bot 运行中...")
 	log.Println("按 Ctrl+C 退出")
 
