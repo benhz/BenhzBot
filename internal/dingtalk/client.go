@@ -128,12 +128,25 @@ func (c *Client) SendActionCard(chatID, title, text string, buttons []ActionButt
 
 // 发送 Markdown 消息
 func (c *Client) SendMarkdown(chatID, title, text string) error {
+	return c.SendMarkdownWithMentions(chatID, title, text, nil)
+}
+
+// 发送 Markdown 消息并@指定用户
+func (c *Client) SendMarkdownWithMentions(chatID, title, text string, atUserIDs []string) error {
 	token, err := c.GetAccessToken()
 	if err != nil {
 		return err
 	}
 
 	url := fmt.Sprintf("https://oapi.dingtalk.com/chat/send?access_token=%s", token)
+
+	// 如果有@用户，在文本末尾添加@提及
+	if len(atUserIDs) > 0 {
+		text = text + "\n\n"
+		for _, userID := range atUserIDs {
+			text = text + fmt.Sprintf("@%s ", userID)
+		}
+	}
 
 	payload := map[string]interface{}{
 		"chatid":  chatID,
