@@ -6,6 +6,7 @@ import (
 	"dingteam-bot/internal/database"
 	"dingteam-bot/internal/dingtalk"
 	"dingteam-bot/internal/handlers"
+	"dingteam-bot/internal/models"
 	"dingteam-bot/internal/scheduler"
 	"dingteam-bot/internal/services"
 	"log"
@@ -81,6 +82,19 @@ func main() {
 		log.Fatalf("❌ 启动调度器失败: %v", err)
 	}
 	defer sched.Stop()
+
+	// 9.1. 设置任务创建回调：创建任务后自动注册提醒并检查是否需要立即发送
+	taskService.SetOnTaskCreatedCallback(func(task models.Task) {
+		log.Printf("任务创建回调触发: [%s]", task.Name)
+
+		// 注册到调度器
+		if err := sched.RegisterNewTask(task); err != nil {
+			log.Printf("注册新任务到调度器失败: %v", err)
+		}
+
+		// 如果当前时间超过10点，立即发送10点提醒
+		sched.SendImmediateReminderIfNeeded(task)
+	})
 
 	// 10. 启动钉钉 Stream 客户端
 	streamClient := dingtalk.NewStreamClient(cfg.DingTalk.AppKey, cfg.DingTalk.AppSecret, messageHandler)

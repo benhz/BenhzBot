@@ -9,11 +9,17 @@ import (
 )
 
 type TaskService struct {
-	db *sql.DB
+	db                      *sql.DB
+	onTaskCreatedCallback   func(models.Task) // 任务创建后的回调
 }
 
 func NewTaskService(db *sql.DB) *TaskService {
 	return &TaskService{db: db}
+}
+
+// SetOnTaskCreatedCallback 设置任务创建后的回调函数
+func (s *TaskService) SetOnTaskCreatedCallback(callback func(models.Task)) {
+	s.onTaskCreatedCallback = callback
 }
 
 // 创建任务
@@ -26,7 +32,7 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 		RETURNING id, created_at, updated_at
 	`
 
-	return s.db.QueryRow(
+	err := s.db.QueryRow(
 		query,
 		task.Name,
 		task.Description,
@@ -40,6 +46,17 @@ func (s *TaskService) CreateTask(task *models.Task) error {
 		task.CreatorName,
 		task.Status,
 	).Scan(&task.ID, &task.CreatedAt, &task.UpdatedAt)
+
+	if err != nil {
+		return err
+	}
+
+	// 任务创建成功后，调用回调函数（如果已设置）
+	if s.onTaskCreatedCallback != nil {
+		s.onTaskCreatedCallback(*task)
+	}
+
+	return nil
 }
 
 // 获取群组的活跃任务
@@ -191,4 +208,90 @@ func (s *TaskService) LogReminder(log *models.ReminderLog) error {
 		log.MemberCount,
 		log.CompletedCount,
 	).Scan(&log.ID, &log.SentAt)
+}
+
+// 获取今日未完成任务的用户列表
+func (s *TaskService) GetIncompleteUsersToday(taskID int, groupChatID string) ([]string, error) {
+	today := time.Now().Format("2006-01-02")
+
+	// 获取群组中所有非领导用户（排除 super_admin）
+	allUsersQuery := `
+		SELECT DISTINCT u.dingtalk_user_id
+		FROM users u
+		WHERE u.role != 'super_admin'
+	`
+
+	rows, err := s.db.Query(allUsersQuery)
+	if err != nil {
+		return nil, fmt.Errorf("获取用户列表失败: %w", err)
+	}
+	defer rows.Close()
+
+	var allUsers []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			continue
+		}
+		allUsers = append(allUsers, userID)
+	}
+
+	// 获取今日已完成的用户
+	completedQuery := `
+		SELECT user_id
+		FROM completion_records
+		WHERE task_id = $1 AND task_date = $2
+	`
+
+	completedRows, err := s.db.Query(completedQuery, taskID, today)
+	if err != nil {
+		return nil, fmt.Errorf("获取完成记录失败: %w", err)
+	}
+	defer completedRows.Close()
+
+	completedMap := make(map[string]bool)
+	for completedRows.Next() {
+		var userID string
+		if err := completedRows.Scan(&userID); err != nil {
+			continue
+		}
+		completedMap[userID] = true
+	}
+
+	// 计算未完成的用户
+	var incompleteUsers []string
+	for _, userID := range allUsers {
+		if !completedMap[userID] {
+			incompleteUsers = append(incompleteUsers, userID)
+		}
+	}
+
+	return incompleteUsers, nil
+}
+
+// 获取群组中所有非领导用户（用于@all，但排除领导）
+func (s *TaskService) GetAllNonLeaderUsers() ([]string, error) {
+	query := `
+		SELECT dingtalk_user_id
+		FROM users
+		WHERE role != 'super_admin'
+		ORDER BY created_at
+	`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("获取用户列表失败: %w", err)
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			continue
+		}
+		users = append(users, userID)
+	}
+
+	return users, nil
 }

@@ -50,6 +50,19 @@ type CompletionRecord struct {
 	IsOnTime    bool           `json:"is_on_time"`
 }
 
+type ReminderType string
+
+const (
+	ReminderTypeMorning10AM  ReminderType = "MORNING_10AM"   // 10点提醒
+	ReminderTypeAdvance1Hour ReminderType = "ADVANCE_1HOUR"  // 提前1小时（任务型）
+	ReminderTypeAdvance30Min ReminderType = "ADVANCE_30MIN"  // 提前30分钟（通知型）
+	ReminderTypeDeadline     ReminderType = "DEADLINE"       // 截止时间（任务型）
+	ReminderTypeTrigger      ReminderType = "TRIGGER_TIME"   // 触发时间（通知型）
+	ReminderTypeOverdue      ReminderType = "OVERDUE"        // 已超时（兼容旧代码）
+	ReminderTypeNormal       ReminderType = "NORMAL"         // 普通提醒（兼容旧代码）
+	ReminderTypeAdvance      ReminderType = "ADVANCE"        // 提前提醒（兼容旧代码）
+)
+
 type ReminderLog struct {
 	ID             int            `json:"id"`
 	TaskID         int            `json:"task_id"`
