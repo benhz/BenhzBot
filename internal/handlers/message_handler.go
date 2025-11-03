@@ -19,20 +19,26 @@ type MessageHandler struct {
 	cfg          *config.Config
 	taskService  *services.TaskService
 	statsService *services.StatsService
+	permService  *services.PermissionService
 	dtClient     *dingtalk.Client
+	difyHandler  *DifyHandler
 }
 
 func NewMessageHandler(
 	cfg *config.Config,
 	taskService *services.TaskService,
 	statsService *services.StatsService,
+	permService *services.PermissionService,
 	dtClient *dingtalk.Client,
+	difyHandler *DifyHandler,
 ) *MessageHandler {
 	return &MessageHandler{
 		cfg:          cfg,
 		taskService:  taskService,
 		statsService: statsService,
+		permService:  permService,
 		dtClient:     dtClient,
+		difyHandler:  difyHandler,
 	}
 }
 
@@ -41,6 +47,16 @@ func (h *MessageHandler) HandleMessage(ctx context.Context, msg *dingtalk.Incomi
 	// 只处理 @ 机器人的消息
 	if !msg.IsInAtList {
 		return nil
+	}
+
+	// 注册会话信息（供 Dify 后续调用时使用）
+	if h.difyHandler != nil {
+		h.difyHandler.RegisterSession(
+			msg.ConversationID,
+			msg.SenderStaffID,
+			msg.SenderNick,
+			msg.ConversationID,
+		)
 	}
 
 	// 提取纯文本内容（去除 @机器人 部分）
@@ -59,6 +75,14 @@ func (h *MessageHandler) HandleMessage(ctx context.Context, msg *dingtalk.Incomi
 		return h.handleCreateTask(msg, content)
 	case strings.Contains(content, "任务列表") || strings.Contains(content, "查看任务"):
 		return h.handleListTasks(msg)
+	case strings.HasPrefix(content, "添加管理员") || strings.HasPrefix(content, "提升管理员"):
+		return h.handlePromoteAdmin(ctx, msg, content)
+	case strings.HasPrefix(content, "移除管理员") || strings.HasPrefix(content, "降级管理员"):
+		return h.handleDemoteAdmin(ctx, msg, content)
+	case strings.Contains(content, "管理员列表"):
+		return h.handleListAdmins(ctx, msg)
+	case strings.Contains(content, "我的权限"):
+		return h.handleMyPermissions(ctx, msg)
 	case strings.Contains(content, "帮助") || content == "?":
 		return h.handleHelp(msg)
 	default:
@@ -203,10 +227,16 @@ func (h *MessageHandler) handleHelp(msg *dingtalk.IncomingMessage) error {
 • @我 已完成 - 打卡完成任务
 • @我 统计 - 查看今日完成统计
 • @我 任务列表 - 查看所有任务
+• @我 我的权限 - 查看我的权限
 
-**管理员命令：**
+**子管理员命令：**
 • @我 创建任务 <名称> <cron> [截止时间] [类型]
   例: 创建任务 写周报 0 17 * * 5 15:00 TASK
+
+**主管理员命令：**
+• @我 添加管理员 @用户 - 将用户提升为子管理员
+• @我 移除管理员 @用户 - 移除用户的子管理员权限
+• @我 管理员列表 - 查看所有管理员
 
 **Cron 表达式示例：**
 • 0 9 * * 1-5 (工作日上午9点)
@@ -275,4 +305,165 @@ func (h *MessageHandler) HandleCardCallback(ctx context.Context, callback *dingt
 	// TODO: 实现卡片按钮回调处理
 	log.Printf("收到卡片回调: %+v", callback)
 	return nil
+}
+
+// ========================================
+// 权限管理相关命令处理
+// ========================================
+
+// handlePromoteAdmin 处理添加管理员命令
+// 格式: @机器人 添加管理员 @用户
+func (h *MessageHandler) handlePromoteAdmin(ctx context.Context, msg *dingtalk.IncomingMessage, content string) error {
+	// 提取被提升用户的ID
+	// 钉钉的消息格式中，@用户的格式是 @{dingtalkId:xxx}
+	targetUserID, targetUsername := h.extractMentionedUser(msg)
+	if targetUserID == "" {
+		return h.sendReply(msg, "❌ 请在命令中 @ 要添加为管理员的用户\n例如: @我 添加管理员 @张三")
+	}
+
+	// 执行提升操作
+	err := h.permService.PromoteToAdmin(ctx, msg.SenderStaffID, targetUserID, targetUsername)
+	if err != nil {
+		return h.sendReply(msg, fmt.Sprintf("❌ 添加管理员失败: %v", err))
+	}
+
+	return h.sendReply(msg, fmt.Sprintf("✅ 成功将 %s 添加为子管理员！", targetUsername))
+}
+
+// handleDemoteAdmin 处理移除管理员命令
+// 格式: @机器人 移除管理员 @用户
+func (h *MessageHandler) handleDemoteAdmin(ctx context.Context, msg *dingtalk.IncomingMessage, content string) error {
+	// 提取被降级用户的ID
+	targetUserID, targetUsername := h.extractMentionedUser(msg)
+	if targetUserID == "" {
+		return h.sendReply(msg, "❌ 请在命令中 @ 要移除管理员权限的用户\n例如: @我 移除管理员 @张三")
+	}
+
+	// 执行降级操作
+	err := h.permService.DemoteFromAdmin(ctx, msg.SenderStaffID, targetUserID)
+	if err != nil {
+		return h.sendReply(msg, fmt.Sprintf("❌ 移除管理员失败: %v", err))
+	}
+
+	return h.sendReply(msg, fmt.Sprintf("✅ 已移除 %s 的子管理员权限", targetUsername))
+}
+
+// handleListAdmins 处理查看管理员列表命令
+func (h *MessageHandler) handleListAdmins(ctx context.Context, msg *dingtalk.IncomingMessage) error {
+	// 获取所有主管理员
+	superAdmins, err := h.permService.ListUsersByRole(ctx, models.RoleSuperAdmin)
+	if err != nil {
+		return h.sendReply(msg, fmt.Sprintf("❌ 查询管理员列表失败: %v", err))
+	}
+
+	// 获取所有子管理员
+	admins, err := h.permService.ListUsersByRole(ctx, models.RoleAdmin)
+	if err != nil {
+		return h.sendReply(msg, fmt.Sprintf("❌ 查询管理员列表失败: %v", err))
+	}
+
+	var result strings.Builder
+	result.WriteString("👥 **管理员列表**\n\n")
+
+	// 主管理员
+	if len(superAdmins) > 0 {
+		result.WriteString("**主管理员：**\n")
+		for i, admin := range superAdmins {
+			result.WriteString(fmt.Sprintf("%d. %s (ID: %s)\n", i+1, admin.Username, admin.DingTalkUserID))
+		}
+		result.WriteString("\n")
+	}
+
+	// 子管理员
+	if len(admins) > 0 {
+		result.WriteString("**子管理员：**\n")
+		for i, admin := range admins {
+			result.WriteString(fmt.Sprintf("%d. %s (ID: %s)\n", i+1, admin.Username, admin.DingTalkUserID))
+		}
+	} else {
+		result.WriteString("**子管理员：** 暂无\n")
+	}
+
+	return h.sendReply(msg, result.String())
+}
+
+// handleMyPermissions 处理查看我的权限命令
+func (h *MessageHandler) handleMyPermissions(ctx context.Context, msg *dingtalk.IncomingMessage) error {
+	// 获取或创建用户
+	user, err := h.permService.GetOrCreateUser(ctx, msg.SenderStaffID, msg.SenderNick)
+	if err != nil {
+		return h.sendReply(msg, fmt.Sprintf("❌ 查询权限失败: %v", err))
+	}
+
+	// 获取权限列表
+	permissions, err := h.permService.GetUserPermissions(ctx, msg.SenderStaffID)
+	if err != nil {
+		return h.sendReply(msg, fmt.Sprintf("❌ 查询权限失败: %v", err))
+	}
+
+	// 构建权限描述
+	var result strings.Builder
+	result.WriteString("🔐 **您的权限信息**\n\n")
+	result.WriteString(fmt.Sprintf("**用户名：** %s\n", user.Username))
+	result.WriteString(fmt.Sprintf("**角色：** %s\n\n", h.getRoleDisplayName(user.Role)))
+	result.WriteString("**拥有的权限：**\n")
+
+	for i, perm := range permissions {
+		result.WriteString(fmt.Sprintf("%d. %s - %s\n", i+1, perm, h.getPermissionDisplayName(perm)))
+	}
+
+	return h.sendReply(msg, result.String())
+}
+
+// extractMentionedUser 从消息中提取被@的用户ID和用户名
+func (h *MessageHandler) extractMentionedUser(msg *dingtalk.IncomingMessage) (string, string) {
+	// 钉钉消息中，AtUsers 字段包含了所有被 @ 的用户
+	// 我们需要排除机器人自己，取第一个被 @ 的用户
+	// 注意：这里的逻辑可能需要根据实际的钉钉SDK结构调整
+
+	// 从消息文本中提取 @{dingtalkId:xxx} 格式
+	re := regexp.MustCompile(`dingtalkId:([a-zA-Z0-9]+)`)
+	matches := re.FindAllStringSubmatch(msg.Text.Content, -1)
+
+	if len(matches) >= 2 {
+		// 第一个通常是机器人自己，第二个才是目标用户
+		userID := matches[1][1]
+		// 用户名可以从消息中解析，这里简单返回ID
+		return userID, userID
+	}
+
+	return "", ""
+}
+
+// getRoleDisplayName 获取角色的显示名称
+func (h *MessageHandler) getRoleDisplayName(role models.UserRole) string {
+	switch role {
+	case models.RoleSuperAdmin:
+		return "主管理员 (拥有所有权限)"
+	case models.RoleAdmin:
+		return "子管理员 (可管理任务)"
+	case models.RoleMember:
+		return "普通成员 (可打卡和查看)"
+	default:
+		return string(role)
+	}
+}
+
+// getPermissionDisplayName 获取权限的显示名称
+func (h *MessageHandler) getPermissionDisplayName(perm string) string {
+	permMap := map[string]string{
+		"add_admin":     "添加子管理员",
+		"remove_admin":  "移除子管理员",
+		"create_task":   "创建任务",
+		"update_task":   "更新任务",
+		"delete_task":   "删除任务",
+		"list_tasks":    "查看任务列表",
+		"complete_task": "打卡完成任务",
+		"view_stats":    "查看统计",
+	}
+
+	if display, ok := permMap[perm]; ok {
+		return display
+	}
+	return perm
 }
