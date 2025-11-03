@@ -78,21 +78,20 @@ func (h *MessageHandler) HandleMessage(ctx context.Context, msg *dingtalk.Incomi
 	return h.handleLegacyCommand(ctx, msg, content)
 }
 
-// forwardToDify 转发消息给 Dify 处理
+// forwardToDify 转发消息给 Dify 工作流处理
 func (h *MessageHandler) forwardToDify(ctx context.Context, msg *dingtalk.IncomingMessage, content string) error {
 	log.Printf("转发消息到 Dify: conversation_id=%s, user=%s, content=%s",
 		msg.ConversationID, msg.SenderStaffID, content)
 
-	// 构造 Dify API 请求
+	// 构造 Dify 工作流 API 请求
+	// 工作流 API 格式：{"inputs": {...}, "response_mode": "blocking", "user": "..."}
 	payload := map[string]interface{}{
-		"query":           content,
-		"user":            msg.SenderStaffID,
-		"conversation_id": msg.ConversationID,
 		"inputs": map[string]string{
-			"username":        msg.SenderNick,
+			"user_input":      content,
 			"conversation_id": msg.ConversationID,
 		},
 		"response_mode": "blocking",
+		"user":          msg.SenderNick,
 	}
 
 	data, err := json.Marshal(payload)
@@ -101,7 +100,7 @@ func (h *MessageHandler) forwardToDify(ctx context.Context, msg *dingtalk.Incomi
 		return h.sendReply(msg, "❌ 消息处理失败")
 	}
 
-	// 发送请求到 Dify
+	// 发送请求到 Dify 工作流
 	req, err := http.NewRequestWithContext(ctx, "POST", h.cfg.Dify.WebhookURL, bytes.NewBuffer(data))
 	if err != nil {
 		log.Printf("创建 Dify 请求失败: %v", err)
@@ -126,10 +125,17 @@ func (h *MessageHandler) forwardToDify(ctx context.Context, msg *dingtalk.Incomi
 		return h.sendReply(msg, "❌ 消息处理失败")
 	}
 
-	// 解析 Dify 响应
+	// 解析 Dify 工作流响应
+	// 工作流响应格式：{"data": {"outputs": {"reply_polisher": "..."}}, ...}
 	var difyResp struct {
-		Answer string `json:"answer"`
-		Error  string `json:"error"`
+		TaskID        string `json:"task_id"`
+		WorkflowRunID string `json:"workflow_run_id"`
+		Data          struct {
+			ID      string                 `json:"id"`
+			Status  string                 `json:"status"`
+			Outputs map[string]interface{} `json:"outputs"`
+			Error   string                 `json:"error"`
+		} `json:"data"`
 	}
 
 	if err := json.Unmarshal(body, &difyResp); err != nil {
@@ -137,18 +143,31 @@ func (h *MessageHandler) forwardToDify(ctx context.Context, msg *dingtalk.Incomi
 		return h.sendReply(msg, "❌ 消息处理失败")
 	}
 
-	if difyResp.Error != "" {
-		log.Printf("Dify 返回错误: %s", difyResp.Error)
-		return h.sendReply(msg, "❌ "+difyResp.Error)
+	// 检查工作流执行状态
+	if difyResp.Data.Status != "succeeded" {
+		log.Printf("Dify 工作流执行失败: status=%s, error=%s", difyResp.Data.Status, difyResp.Data.Error)
+		return h.sendReply(msg, "❌ 消息处理失败")
+	}
+
+	// 提取工作流输出中的回复内容
+	// 尝试从常见的输出字段中提取回复
+	var reply string
+	for key, value := range difyResp.Data.Outputs {
+		// 常见的回复字段名：reply, reply_polisher, text, answer 等
+		if str, ok := value.(string); ok && str != "" {
+			reply = str
+			log.Printf("从工作流输出字段 '%s' 中提取到回复", key)
+			break
+		}
 	}
 
 	// 如果 Dify 返回了回复，则发送给用户
-	if difyResp.Answer != "" {
-		return h.sendReply(msg, difyResp.Answer)
+	if reply != "" {
+		return h.sendReply(msg, reply)
 	}
 
 	// 如果没有回复，表示 Dify 可能已经通过工具调用处理了请求
-	log.Printf("Dify 处理完成，无直接回复")
+	log.Printf("Dify 工作流处理完成，无直接回复")
 	return nil
 }
 
