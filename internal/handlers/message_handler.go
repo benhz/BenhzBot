@@ -210,8 +210,37 @@ func (h *MessageHandler) handleCompletion(msg *dingtalk.IncomingMessage) error {
 		return h.sendReply(msg, "❌ 当前群没有活跃的任务")
 	}
 
-	// 默认打卡第一个任务（实际应该让用户选择）
-	task := tasks[0]
+	// 尝试从消息中提取任务ID（格式：#123 或 #任务1）
+	taskID := h.extractTaskID(msg.Text.Content)
+
+	var task models.Task
+	var found bool
+
+	if taskID > 0 {
+		// 如果提取到了任务ID，查找对应的任务
+		for _, t := range tasks {
+			if int64(t.ID) == taskID {
+				task = t
+				found = true
+				break
+			}
+		}
+		if !found {
+			return h.sendReply(msg, fmt.Sprintf("❌ 未找到任务 #%d，请检查任务ID是否正确", taskID))
+		}
+	} else if len(tasks) == 1 {
+		// 如果只有一个任务，直接使用
+		task = tasks[0]
+		found = true
+	} else {
+		// 多个任务但没有指定ID，提示用户选择
+		var taskList strings.Builder
+		taskList.WriteString("❓ 当前有多个活跃任务，请指定要完成的任务：\n\n")
+		for _, t := range tasks {
+			taskList.WriteString(fmt.Sprintf("• %s - 回复: @我 已完成 #%d\n", t.Name, t.ID))
+		}
+		return h.sendReply(msg, taskList.String())
+	}
 
 	// 检查是否已打卡
 	completed, err := h.taskService.HasCompletedToday(task.ID, msg.SenderStaffID)
@@ -220,7 +249,7 @@ func (h *MessageHandler) handleCompletion(msg *dingtalk.IncomingMessage) error {
 	}
 
 	if completed {
-		return h.sendReply(msg, "✅ 您今天已经打过卡了！")
+		return h.sendReply(msg, fmt.Sprintf("✅ 您今天已经打过卡了！任务: %s (#%d)", task.Name, task.ID))
 	}
 
 	// 判断是否按时完成
@@ -252,7 +281,20 @@ func (h *MessageHandler) handleCompletion(msg *dingtalk.IncomingMessage) error {
 		status = "⏰"
 	}
 
-	return h.sendReply(msg, fmt.Sprintf("%s 打卡成功！任务: %s", status, task.Name))
+	return h.sendReply(msg, fmt.Sprintf("%s 打卡成功！任务: %s (#%d)", status, task.Name, task.ID))
+}
+
+// extractTaskID 从消息中提取任务ID（格式：#123）
+func (h *MessageHandler) extractTaskID(content string) int64 {
+	// 匹配 #数字 格式
+	re := regexp.MustCompile(`#(\d+)`)
+	matches := re.FindStringSubmatch(content)
+	if len(matches) >= 2 {
+		var taskID int64
+		fmt.Sscanf(matches[1], "%d", &taskID)
+		return taskID
+	}
+	return 0
 }
 
 // 处理统计查询

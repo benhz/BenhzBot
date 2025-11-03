@@ -135,6 +135,63 @@ func (s *Scheduler) executeTask(task models.Task) error {
 	return nil
 }
 
+// buildTaskReminderMessage 构建任务提醒消息（卡片格式）
+func (s *Scheduler) buildTaskReminderMessage(task models.Task, reminderType models.ReminderType, incompleteCount int) (string, string, []dingtalk.ActionButton) {
+	now := time.Now()
+	deadline := task.DeadlineTime.Time.In(s.location)
+
+	var title, status string
+
+	switch reminderType {
+	case models.ReminderTypeMorning10AM:
+		title = "🌅 早安提醒"
+		status = fmt.Sprintf("今日需完成，截止时间: %s", deadline.Format("15:04"))
+
+	case models.ReminderTypeAdvance1Hour:
+		title = "⏰ 提前1小时提醒"
+		status = fmt.Sprintf("距离截止时间还有1小时，截止时间: %s", deadline.Format("15:04"))
+
+	case models.ReminderTypeDeadline:
+		if now.After(deadline) {
+			title = "🔴 超时通报"
+			status = "**任务已超时，请尽快完成！**"
+		} else {
+			title = "⏰ 截止时间提醒"
+			status = fmt.Sprintf("现在是截止时间: %s", deadline.Format("15:04"))
+		}
+	}
+
+	// 构建卡片文本内容
+	text := fmt.Sprintf(
+		"### %s\n\n"+
+			"📋 任务: **%s**\n"+
+			"⏰ %s\n"+
+			"👥 当前未完成人数: **%d 人**\n\n"+
+			"%s\n\n"+
+			"完成后请点击下方按钮或回复: @我 已完成 #%d",
+		title,
+		task.Name,
+		status,
+		incompleteCount,
+		task.Description.String,
+		task.ID,
+	)
+
+	// 构建按钮（暂时使用占位 URL，后续可以改为实际的回调 API）
+	buttons := []dingtalk.ActionButton{
+		{
+			Title:     "👀 我已收到",
+			ActionURL: fmt.Sprintf("dingtalk://dingtalkclient/action/sendmsg?content=@机器人 已收到 #%d", task.ID),
+		},
+		{
+			Title:     "✅ 我已完成",
+			ActionURL: fmt.Sprintf("dingtalk://dingtalkclient/action/sendmsg?content=@机器人 已完成 #%d", task.ID),
+		},
+	}
+
+	return title, text, buttons
+}
+
 // 构建任务消息（过期检查）
 func (s *Scheduler) buildTaskMessage(task models.Task) (string, string) {
 	now := time.Now()
@@ -146,12 +203,15 @@ func (s *Scheduler) buildTaskMessage(task models.Task) (string, string) {
 		// TODO: 集成群成员列表
 		message := fmt.Sprintf(
 			"⏰ **任务超时通报**\n\n"+
-				"📋 任务: %s\n"+
+				"📋 任务: %s (ID: #%d)\n"+
 				"⏰ 截止时间: %s\n"+
 				"🔴 当前状态: **已超时**\n\n"+
-				"请尽快完成任务！",
+				"请尽快完成任务！\n\n"+
+				"完成后回复: @我 已完成 #%d",
 			task.Name,
+			task.ID,
 			deadline.Format("15:04"),
+			task.ID,
 		)
 		return message, "OVERDUE"
 	}
@@ -159,12 +219,14 @@ func (s *Scheduler) buildTaskMessage(task models.Task) (string, string) {
 	// 未过期，发送普通提醒
 	message := fmt.Sprintf(
 		"⏰ **任务提醒**\n\n"+
-			"📋 任务: %s\n"+
+			"📋 任务: %s (ID: #%d)\n"+
 			"⏰ 截止时间: %s\n"+
 			"📝 请记得及时完成任务\n\n"+
-			"完成后回复: @我 已完成",
+			"完成后回复: @我 已完成 #%d",
 		task.Name,
+		task.ID,
 		deadline.Format("15:04"),
+		task.ID,
 	)
 	return message, "NORMAL"
 }
@@ -173,10 +235,11 @@ func (s *Scheduler) buildTaskMessage(task models.Task) (string, string) {
 func (s *Scheduler) buildNotificationMessage(task models.Task) (string, string) {
 	message := fmt.Sprintf(
 		"🔔 **提醒通知**\n\n"+
-			"📋 %s\n"+
+			"📋 %s (ID: #%d)\n"+
 			"⏰ 时间: %s\n\n"+
 			"%s",
 		task.Name,
+		task.ID,
 		time.Now().Add(time.Duration(task.AdvanceMinutes)*time.Minute).Format("15:04"),
 		task.Description.String,
 	)

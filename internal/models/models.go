@@ -20,6 +20,14 @@ const (
 	TaskStatusDeleted TaskStatus = "DELETED"
 )
 
+type ReminderType string
+
+const (
+	ReminderTypeMorning10AM   ReminderType = "MORNING_10AM"   // 早上10点提醒
+	ReminderTypeAdvance1Hour  ReminderType = "ADVANCE_1HOUR"  // 提前1小时提醒
+	ReminderTypeDeadline      ReminderType = "DEADLINE"       // 截止时间提醒
+)
+
 type Task struct {
 	ID             int            `json:"id"`
 	Name           string         `json:"name"`
