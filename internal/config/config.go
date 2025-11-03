@@ -11,13 +11,16 @@ import (
 type Config struct {
 	// 钉钉配置
 	DingTalk DingTalkConfig
-	
+
 	// 数据库配置
 	Database DatabaseConfig
-	
+
 	// 服务配置
 	Server ServerConfig
-	
+
+	// Dify 配置
+	Dify DifyConfig
+
 	// 管理员配置
 	AdminUsers []string
 }
@@ -43,6 +46,12 @@ type ServerConfig struct {
 	Timezone string
 }
 
+type DifyConfig struct {
+	APIKey      string
+	WebhookURL  string
+	Enabled     bool
+}
+
 func Load() (*Config, error) {
 	// 加载 .env 文件（k8s 环境中可能不存在，忽略错误）
 	_ = godotenv.Load()
@@ -65,6 +74,11 @@ func Load() (*Config, error) {
 		Server: ServerConfig{
 			Port:     getEnv("SERVER_PORT", "8080"),
 			Timezone: getEnv("TIMEZONE", "Asia/Shanghai"),
+		},
+		Dify: DifyConfig{
+			APIKey:     getEnv("DIFY_API_KEY", ""),
+			WebhookURL: getEnv("DIFY_WEBHOOK_URL", ""),
+			Enabled:    getEnv("DIFY_ENABLED", "false") == "true",
 		},
 		AdminUsers: parseAdminUsers(getEnv("ADMIN_USERS", "")),
 	}

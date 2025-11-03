@@ -19,6 +19,9 @@ type DifyHandler struct {
 	taskService  *services.TaskService
 	statsService *services.StatsService
 	sessionStore *SessionStore
+	dtClient     interface {
+		SendGroupMessage(chatID, content string) error
+	}
 }
 
 // NewDifyHandler 创建 Dify 处理器
@@ -26,12 +29,16 @@ func NewDifyHandler(
 	permService *services.PermissionService,
 	taskService *services.TaskService,
 	statsService *services.StatsService,
+	dtClient interface {
+		SendGroupMessage(chatID, content string) error
+	},
 ) *DifyHandler {
 	return &DifyHandler{
 		permService:  permService,
 		taskService:  taskService,
 		statsService: statsService,
 		sessionStore: NewSessionStore(),
+		dtClient:     dtClient,
 	}
 }
 
@@ -436,4 +443,51 @@ func (h *DifyHandler) RegisterSession(conversationID, userID, username, groupCha
 // GetSessionStore 获取会话存储（供其他模块使用）
 func (h *DifyHandler) GetSessionStore() *SessionStore {
 	return h.sessionStore
+}
+
+// ========================================
+// 发送消息 API（供 Dify 调用）
+// ========================================
+
+// SendMessageRequest 发送消息请求
+type SendMessageRequest struct {
+	ConversationID string `json:"conversation_id" binding:"required"`
+	Message        string `json:"message" binding:"required"`
+}
+
+// SendMessageResponse 发送消息响应
+type SendMessageResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// SendMessage 发送消息给钉钉群聊
+// POST /api/v1/dify/send_message
+func (h *DifyHandler) SendMessage(c *gin.Context) {
+	var req SendMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, SendMessageResponse{
+			Success: false,
+			Message: "请求参数错误",
+		})
+		return
+	}
+
+	log.Printf("Dify 请求发送消息: conversation_id=%s, message=%s",
+		req.ConversationID, req.Message)
+
+	// 发送消息到钉钉群聊
+	if err := h.dtClient.SendGroupMessage(req.ConversationID, req.Message); err != nil {
+		log.Printf("发送钉钉消息失败: %v", err)
+		c.JSON(http.StatusInternalServerError, SendMessageResponse{
+			Success: false,
+			Message: "发送消息失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, SendMessageResponse{
+		Success: true,
+		Message: "消息发送成功",
+	})
 }

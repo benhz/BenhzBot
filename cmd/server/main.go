@@ -58,7 +58,7 @@ func main() {
 	log.Println("✓ 钉钉连接成功")
 
 	// 6. 初始化 Dify 处理器（基于会话的权限检查）
-	difyHandler := handlers.NewDifyHandler(permService, taskService, statsService)
+	difyHandler := handlers.NewDifyHandler(permService, taskService, statsService, dtClient)
 
 	// 7. 初始化消息处理器
 	messageHandler := handlers.NewMessageHandler(cfg, taskService, statsService, permService, dtClient, difyHandler)
@@ -137,7 +137,8 @@ func setupRouter(permService *services.PermissionService, taskService *services.
 		// Dify 集成 API（推荐使用）
 		dify := api.Group("/dify")
 		{
-			dify.POST("/execute", difyHandler.Execute) // 统一执行端点（基于会话的权限检查）
+			dify.POST("/execute", difyHandler.Execute)       // 统一执行端点（基于会话的权限检查）
+			dify.POST("/send_message", difyHandler.SendMessage) // 发送消息端点（供 Dify 调用）
 		}
 
 		// 权限相关 API（旧版，仍然保留兼容性）
