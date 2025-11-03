@@ -301,3 +301,64 @@ func (s *PermissionService) LogPermissionCheck(ctx context.Context, userID strin
 
 	s.logPermissionAction(ctx, userID, string(action), "command", "", result, reason)
 }
+
+// ========================================
+// 超级管理员初始化
+// ========================================
+
+// InitializeSuperAdmins 初始化超级管理员
+// 从配置文件中读取 ADMIN_USERS，并确保他们在数据库中被设置为 super_admin 角色
+// 这个方法应该在应用启动时调用
+func (s *PermissionService) InitializeSuperAdmins(ctx context.Context, adminUserIDs []string) error {
+	if len(adminUserIDs) == 0 {
+		log.Println("⚠️  警告：未配置超级管理员（ADMIN_USERS 为空）")
+		return nil
+	}
+
+	log.Printf("🔐 开始初始化超级管理员，共 %d 个用户...", len(adminUserIDs))
+
+	for _, userID := range adminUserIDs {
+		// 检查用户是否已存在
+		user, err := s.GetUserByDingTalkID(ctx, userID)
+
+		if err != nil {
+			// 用户不存在，创建为超级管理员
+			query := `
+				INSERT INTO users (dingtalk_user_id, username, role)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (dingtalk_user_id) DO UPDATE
+				SET role = $3, updated_at = CURRENT_TIMESTAMP
+			`
+
+			_, err = s.db.ExecContext(ctx, query, userID, userID, models.RoleSuperAdmin)
+			if err != nil {
+				log.Printf("❌ 初始化超级管理员失败 (用户: %s): %v", userID, err)
+				continue
+			}
+
+			log.Printf("✅ 创建超级管理员: %s", userID)
+		} else {
+			// 用户已存在，更新为超级管理员（如果角色不对）
+			if user.Role != models.RoleSuperAdmin {
+				query := `
+					UPDATE users
+					SET role = $1, updated_at = CURRENT_TIMESTAMP
+					WHERE dingtalk_user_id = $2
+				`
+
+				_, err = s.db.ExecContext(ctx, query, models.RoleSuperAdmin, userID)
+				if err != nil {
+					log.Printf("❌ 更新超级管理员失败 (用户: %s): %v", userID, err)
+					continue
+				}
+
+				log.Printf("✅ 更新用户为超级管理员: %s (原角色: %s)", userID, user.Role)
+			} else {
+				log.Printf("✓ 超级管理员已存在: %s", userID)
+			}
+		}
+	}
+
+	log.Println("✅ 超级管理员初始化完成")
+	return nil
+}

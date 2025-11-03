@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -65,6 +69,91 @@ func (h *MessageHandler) HandleMessage(ctx context.Context, msg *dingtalk.Incomi
 
 	log.Printf("处理指令: %s (来自 %s)", content, msg.SenderNick)
 
+	// 如果启用了 Dify，则转发给 Dify 处理
+	if h.cfg.Dify.Enabled {
+		return h.forwardToDify(ctx, msg, content)
+	}
+
+	// 否则使用传统的命令匹配方式（兜底方案）
+	return h.handleLegacyCommand(ctx, msg, content)
+}
+
+// forwardToDify 转发消息给 Dify 处理
+func (h *MessageHandler) forwardToDify(ctx context.Context, msg *dingtalk.IncomingMessage, content string) error {
+	log.Printf("转发消息到 Dify: conversation_id=%s, user=%s, content=%s",
+		msg.ConversationID, msg.SenderStaffID, content)
+
+	// 构造 Dify API 请求
+	payload := map[string]interface{}{
+		"query":           content,
+		"user":            msg.SenderStaffID,
+		"conversation_id": msg.ConversationID,
+		"inputs": map[string]string{
+			"username":        msg.SenderNick,
+			"conversation_id": msg.ConversationID,
+		},
+		"response_mode": "blocking",
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("序列化 Dify 请求失败: %v", err)
+		return h.sendReply(msg, "❌ 消息处理失败")
+	}
+
+	// 发送请求到 Dify
+	req, err := http.NewRequestWithContext(ctx, "POST", h.cfg.Dify.WebhookURL, bytes.NewBuffer(data))
+	if err != nil {
+		log.Printf("创建 Dify 请求失败: %v", err)
+		return h.sendReply(msg, "❌ 消息处理失败")
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.cfg.Dify.APIKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("调用 Dify API 失败: %v", err)
+		return h.sendReply(msg, "❌ 消息处理失败")
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Dify API 返回错误状态码: %d, 响应: %s", resp.StatusCode, string(body))
+		return h.sendReply(msg, "❌ 消息处理失败")
+	}
+
+	// 解析 Dify 响应
+	var difyResp struct {
+		Answer string `json:"answer"`
+		Error  string `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &difyResp); err != nil {
+		log.Printf("解析 Dify 响应失败: %v, 响应: %s", err, string(body))
+		return h.sendReply(msg, "❌ 消息处理失败")
+	}
+
+	if difyResp.Error != "" {
+		log.Printf("Dify 返回错误: %s", difyResp.Error)
+		return h.sendReply(msg, "❌ "+difyResp.Error)
+	}
+
+	// 如果 Dify 返回了回复，则发送给用户
+	if difyResp.Answer != "" {
+		return h.sendReply(msg, difyResp.Answer)
+	}
+
+	// 如果没有回复，表示 Dify 可能已经通过工具调用处理了请求
+	log.Printf("Dify 处理完成，无直接回复")
+	return nil
+}
+
+// handleLegacyCommand 处理传统命令（兜底方案）
+func (h *MessageHandler) handleLegacyCommand(ctx context.Context, msg *dingtalk.IncomingMessage, content string) error {
 	// 匹配不同的命令
 	switch {
 	case strings.Contains(content, "已完成") || strings.Contains(content, "我已提交"):

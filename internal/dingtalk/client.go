@@ -67,24 +67,32 @@ func (c *Client) GetAccessToken() (string, error) {
 	return c.AccessToken, nil
 }
 
-// 发送群消息（文本）
+// 发送群消息（文本）- 使用新版 API
 func (c *Client) SendGroupMessage(chatID, content string) error {
 	token, err := c.GetAccessToken()
 	if err != nil {
 		return err
 	}
 
-	url := fmt.Sprintf("https://oapi.dingtalk.com/chat/send?access_token=%s", token)
+	url := "https://api.dingtalk.com/v1.0/robot/groupMessages/send"
 
-	payload := map[string]interface{}{
-		"chatid":  chatID,
-		"msgtype": "text",
-		"text": map[string]string{
-			"content": content,
-		},
+	// 构造消息参数
+	msgParam := map[string]string{
+		"content": content,
+	}
+	msgParamJSON, err := json.Marshal(msgParam)
+	if err != nil {
+		return fmt.Errorf("序列化消息参数失败: %w", err)
 	}
 
-	return c.sendRequest(url, payload)
+	payload := map[string]interface{}{
+		"msgKey":            "sampleText",
+		"msgParam":          string(msgParamJSON),
+		"openConversationId": chatID,
+		"robotCode":         c.RobotCode,
+	}
+
+	return c.sendRequestWithHeader(url, payload, token)
 }
 
 // 发送 ActionCard
@@ -139,7 +147,7 @@ func (c *Client) SendMarkdown(chatID, title, text string) error {
 	return c.sendRequest(url, payload)
 }
 
-// 通用发送请求
+// 通用发送请求（旧版 API，带 access_token 在 URL 中）
 func (c *Client) sendRequest(url string, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -164,6 +172,50 @@ func (c *Client) sendRequest(url string, payload interface{}) error {
 
 	if result.ErrCode != 0 {
 		return fmt.Errorf("钉钉 API 错误 (%d): %s", result.ErrCode, result.ErrMsg)
+	}
+
+	return nil
+}
+
+// 新版 API 请求（access_token 在 header 中）
+func (c *Client) sendRequestWithHeader(url string, payload interface{}, token string) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("发送请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	// 新版 API 返回格式可能不同，先检查 HTTP 状态码
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("钉钉 API 请求失败，状态码: %d, 响应: %s", resp.StatusCode, string(body))
+	}
+
+	// 尝试解析响应
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("解析响应失败: %w, 响应: %s", err, string(body))
+	}
+
+	// 检查是否有错误信息
+	if errCode, ok := result["errcode"].(float64); ok && errCode != 0 {
+		errMsg := result["errmsg"].(string)
+		return fmt.Errorf("钉钉 API 错误 (%d): %s", int(errCode), errMsg)
 	}
 
 	return nil
